@@ -8,7 +8,7 @@ Notifications.setNotificationHandler({
   handleNotification: async () => ({ shouldShowAlert: true, shouldPlaySound: true, shouldSetBadge: true })
 });
 
-const API_URL = Constants.expoConfig?.extra?.apiUrl || 'https://bkr-fastfood-backend-1zbb.onrender.com/api';
+const API_URL = Constants.expoConfig?.extra?.apiUrl || 'https://bkr-fastfood-backend-6snv.onrender.com/api';
 const POLL_MS = 30000;
 
 const GOLD = '#e8b84b';
