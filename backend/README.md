@@ -21,3 +21,14 @@ npm start
 ```
 
 The health endpoint is `GET /health`.
+
+## Item purchase history
+
+Purchase items and their records are stored in PostgreSQL and shared by both clients. The server creates the required tables and indexes from `schema.sql` at startup.
+
+- `GET /api/purchase-history/items` lists items.
+- `POST /api/purchase-history/items` adds an item with an `itemName`.
+- `GET /api/purchase-history/items/:id/records?from=YYYY-MM-DD&to=YYYY-MM-DD` returns the item's records and the total paid in that date range. Either date can be omitted.
+- `POST /api/purchase-history/items/:id/records` saves a purchase with `date`, `quantity`, `unit`, and `totalPaid`. The server calculates and stores the price per unit.
+
+Supported units are `packet`, `kg`, `g`, `L`, `mL`, `piece`, and `box`.

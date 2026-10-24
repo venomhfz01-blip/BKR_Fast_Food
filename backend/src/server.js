@@ -295,6 +295,68 @@ api.get('/stock-in/range', async (req, res) => { try { const [from, to] = dateRa
 api.get('/stock-in/:id', async (req, res) => { try { const r = (await query('SELECT stock_in_id AS "stockInId", bill_no AS "billNo", stock_date::text AS "stockDate", total_amount AS "totalAmount", remarks FROM stock_ins WHERE stock_in_id = $1', [req.params.id])).rows[0]; if (!r) return res.sendStatus(404); r.items = (await query('SELECT item_id AS "itemId", item_name AS "itemName", quantity, unit_price AS "unitPrice", line_total AS "lineTotal" FROM stock_in_items WHERE stock_in_id = $1', [req.params.id])).rows; res.json(r); } catch (e) { sendError(res, e); } });
 api.post('/stock-in', async (req, res) => { const client = await pool.connect(); try { await client.query('BEGIN'); const b = req.body; const stock = (await client.query('INSERT INTO stock_ins (bill_no, remarks, total_amount) VALUES ($1,$2,$3) RETURNING stock_in_id AS "stockInId"', [b.billNo, b.remarks || '', number(b.totalAmount)])).rows[0]; for (const item of b.items || []) { const itemId = number(item.itemId); const values = [stock.stockInId, itemId, item.itemName || '', number(item.quantity), number(item.unitPrice), number(item.lineTotal)]; await client.query('INSERT INTO stock_in_items (stock_in_id, item_id, item_name, quantity, unit_price, line_total) VALUES ($1,$2,$3,$4,$5,$6)', values); if (itemId > 0) await client.query('INSERT INTO inventory_items (item_id, item_name, quantity, last_unit_price) VALUES ($1,$2,$3,$4) ON CONFLICT (item_name) DO UPDATE SET quantity = inventory_items.quantity + EXCLUDED.quantity, last_unit_price = EXCLUDED.last_unit_price', [itemId, item.itemName || '', number(item.quantity), number(item.unitPrice)]); else await client.query('INSERT INTO inventory_items (item_name, quantity, last_unit_price) VALUES ($1,$2,$3) ON CONFLICT (item_name) DO UPDATE SET quantity = inventory_items.quantity + EXCLUDED.quantity, last_unit_price = EXCLUDED.last_unit_price', [item.itemName || '', number(item.quantity), number(item.unitPrice)]); } await client.query('COMMIT'); res.status(201).json(stock); } catch (e) { await client.query('ROLLBACK'); sendError(res, e); } finally { client.release(); } });
 
+const purchaseUnits = new Set(['packet', 'kg', 'g', 'L', 'mL', 'piece', 'box']);
+api.get('/purchase-history/items', async (_req, res) => {
+  try {
+    res.json((await query('SELECT item_id AS "itemId", item_name AS "itemName" FROM purchase_history_items ORDER BY LOWER(item_name), item_id')).rows);
+  } catch (e) { sendError(res, e); }
+});
+api.post('/purchase-history/items', async (req, res) => {
+  const itemName = String(req.body?.itemName || '').trim();
+  if (!itemName || itemName.length > 100) return res.status(400).json({ error: 'Enter an item name up to 100 characters.' });
+  try {
+    const result = await query('INSERT INTO purchase_history_items (item_name) VALUES ($1) ON CONFLICT (LOWER(BTRIM(item_name))) DO NOTHING RETURNING item_id AS "itemId", item_name AS "itemName"', [itemName]);
+    if (result.rowCount) return res.status(201).json(result.rows[0]);
+    const existing = await query('SELECT item_id AS "itemId", item_name AS "itemName" FROM purchase_history_items WHERE LOWER(BTRIM(item_name)) = LOWER(BTRIM($1))', [itemName]);
+    return res.status(409).json({ error: `"${existing.rows[0]?.itemName || itemName}" already exists.` });
+  } catch (e) { sendError(res, e); }
+});
+api.get('/purchase-history/items/:id/records', async (req, res) => {
+  const [from, to] = dateRange(req);
+  try {
+    const records = await query(
+      `SELECT purchase_id AS "purchaseId", purchase_date::text AS date, quantity, unit,
+              unit_price AS "unitPrice", total_paid AS "totalPaid"
+       FROM purchase_history_records
+       WHERE item_id = $1 AND purchase_date BETWEEN $2 AND $3
+       ORDER BY purchase_date DESC, purchase_id DESC`,
+      [req.params.id, from, to]
+    );
+    const total = await query(
+      'SELECT COALESCE(SUM(total_paid), 0) AS "totalPaid" FROM purchase_history_records WHERE item_id = $1 AND purchase_date BETWEEN $2 AND $3',
+      [req.params.id, from, to]
+    );
+    res.json({ records: records.rows, totalPaid: total.rows[0].totalPaid });
+  } catch (e) { sendError(res, e); }
+});
+api.post('/purchase-history/items/:id/records', async (req, res) => {
+  const { date, unit } = req.body || {};
+  const quantity = Number(req.body?.quantity);
+  const totalPaid = Number(req.body?.totalPaid);
+  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`)) || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date) {
+    return res.status(400).json({ error: 'Enter a valid purchase date.' });
+  }
+  if (!Number.isFinite(quantity) || quantity <= 0 || quantity > 999999999.999 || Math.abs(quantity * 1000 - Math.round(quantity * 1000)) > 1e-7) {
+    return res.status(400).json({ error: 'Quantity must be greater than zero and have no more than 3 decimal places.' });
+  }
+  if (!Number.isFinite(totalPaid) || totalPaid < 0 || totalPaid > 9999999999.99 || Math.abs(totalPaid * 100 - Math.round(totalPaid * 100)) > 1e-6) {
+    return res.status(400).json({ error: 'Total purchase price must be valid and have no more than 2 decimal places.' });
+  }
+  if (!purchaseUnits.has(unit)) return res.status(400).json({ error: 'Select a supported unit.' });
+  try {
+    const result = await query(
+      `INSERT INTO purchase_history_records (item_id, purchase_date, quantity, unit, total_paid, unit_price)
+       SELECT item_id, $2, $3, $4, $5, ROUND($5::numeric / $3::numeric, 4)
+       FROM purchase_history_items WHERE item_id = $1
+       RETURNING purchase_id AS "purchaseId", purchase_date::text AS date, quantity, unit,
+                 unit_price AS "unitPrice", total_paid AS "totalPaid"`,
+      [req.params.id, date, quantity, unit, totalPaid]
+    );
+    if (!result.rowCount) return res.sendStatus(404);
+    res.status(201).json(result.rows[0]);
+  } catch (e) { sendError(res, e); }
+});
+
 app.use('/api', api);
 app.use((err, _req, res, _next) => sendError(res, err));
 

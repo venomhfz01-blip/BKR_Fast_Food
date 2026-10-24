@@ -85,6 +85,29 @@ CREATE TABLE IF NOT EXISTS stock_in_items (
 CREATE INDEX IF NOT EXISTS orders_order_date_idx ON orders(order_date);
 CREATE INDEX IF NOT EXISTS stock_ins_stock_date_idx ON stock_ins(stock_date);
 
+CREATE TABLE IF NOT EXISTS purchase_history_items (
+  item_id SERIAL PRIMARY KEY,
+  item_name TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS purchase_history_items_name_unique
+  ON purchase_history_items (LOWER(BTRIM(item_name)));
+
+CREATE TABLE IF NOT EXISTS purchase_history_records (
+  purchase_id SERIAL PRIMARY KEY,
+  item_id INTEGER NOT NULL REFERENCES purchase_history_items(item_id) ON DELETE CASCADE,
+  purchase_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  quantity NUMERIC(12, 3) NOT NULL CHECK (quantity > 0),
+  unit TEXT NOT NULL,
+  total_paid NUMERIC(12, 2) NOT NULL CHECK (total_paid >= 0),
+  unit_price NUMERIC(18, 4) NOT NULL CHECK (unit_price >= 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS purchase_history_records_item_date_idx
+  ON purchase_history_records(item_id, purchase_date DESC, purchase_id DESC);
+
 DROP INDEX IF EXISTS menu_items_variant_unique_idx;
 
 WITH duplicate_pizza_prices AS (
