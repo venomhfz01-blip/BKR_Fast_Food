@@ -28,6 +28,7 @@ Purchase items and their records are stored in PostgreSQL and shared by both cli
 
 - `GET /api/purchase-history/items` lists items.
 - `POST /api/purchase-history/items` adds an item with an `itemName`.
+- `DELETE /api/purchase-history/items/:id` deletes an item and its purchase history.
 - `GET /api/purchase-history/items/:id/records?from=YYYY-MM-DD&to=YYYY-MM-DD` returns the item's records and the total paid in that date range. Either date can be omitted.
 - `POST /api/purchase-history/items/:id/records` saves a purchase with `date`, `quantity`, `unit`, and `totalPaid`. The server calculates and stores the price per unit.
 

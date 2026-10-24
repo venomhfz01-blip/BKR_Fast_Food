@@ -311,6 +311,13 @@ api.post('/purchase-history/items', async (req, res) => {
     return res.status(409).json({ error: `"${existing.rows[0]?.itemName || itemName}" already exists.` });
   } catch (e) { sendError(res, e); }
 });
+api.delete('/purchase-history/items/:id', async (req, res) => {
+  try {
+    const result = await query('DELETE FROM purchase_history_items WHERE item_id = $1 RETURNING item_id', [req.params.id]);
+    if (!result.rowCount) return res.sendStatus(404);
+    res.sendStatus(204);
+  } catch (e) { sendError(res, e); }
+});
 api.get('/purchase-history/items/:id/records', async (req, res) => {
   const [from, to] = dateRange(req);
   try {
