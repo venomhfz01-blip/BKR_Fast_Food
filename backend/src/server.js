@@ -15,7 +15,7 @@ app.use(express.json({ limit: '1mb' }));
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', process.env.ALLOWED_ORIGIN || '*');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
@@ -412,6 +412,39 @@ api.get('/closing-reports/:date', async (req, res) => {
     )).rows[0];
     if (!report) return res.sendStatus(404);
     res.json(report);
+  } catch (e) { sendError(res, e); }
+});
+
+api.patch('/closing-reports/:date', async (req, res) => {
+  const sourceDate = req.params.date;
+  const targetDate = req.body?.newDate;
+  if (!isClosingDate(sourceDate) || !isClosingDate(targetDate)) {
+    return res.status(400).json({ error: 'Enter valid source and destination dates.' });
+  }
+  if (sourceDate === targetDate) {
+    return res.status(400).json({ error: 'The destination date must differ from the current date.' });
+  }
+  try {
+    const updated = await query(
+      `UPDATE daily_closing_reports AS report
+       SET report_date = $2, updated_at = NOW()
+       WHERE report.report_date = $1
+         AND NOT EXISTS (
+           SELECT 1 FROM daily_closing_reports existing WHERE existing.report_date = $2
+         )
+       RETURNING report_date::text AS date, opening_cash AS "openingCash",
+         cash_sales AS "cashSales", online_sales AS "onlineSales", total_sales AS sales,
+         total_expenses AS "expensesTotal", ending_cash AS "endingCash", expenses`,
+      [sourceDate, targetDate]
+    );
+    if (updated.rowCount) return res.json(updated.rows[0]);
+
+    const sourceExists = await query(
+      'SELECT 1 FROM daily_closing_reports WHERE report_date = $1',
+      [sourceDate]
+    );
+    if (!sourceExists.rowCount) return res.sendStatus(404);
+    return res.status(409).json({ error: 'A report already exists on the destination date.' });
   } catch (e) { sendError(res, e); }
 });
 
