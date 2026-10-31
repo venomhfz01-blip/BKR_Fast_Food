@@ -373,3 +373,97 @@ async function start() {
 }
 
 start().catch((error) => { console.error(error); process.exit(1); });
+
+const isClosingDate = (value) => typeof value === 'string'
+  && /^\d{4}-\d{2}-\d{2}$/.test(value)
+  && !Number.isNaN(Date.parse(`${value}T00:00:00Z`))
+  && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+const parseClosingAmount = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 9999999999.99
+    && Math.abs(parsed * 100 - Math.round(parsed * 100)) < 1e-6
+    ? parsed
+    : null;
+};
+const closingReportSelect = `SELECT report_date::text AS date, opening_cash AS "openingCash",
+  cash_sales AS "cashSales", online_sales AS "onlineSales", total_sales AS sales,
+  total_expenses AS "expensesTotal", ending_cash AS "endingCash", expenses
+  FROM daily_closing_reports`;
+
+api.get('/closing-reports', async (req, res) => {
+  const [from, to] = dateRange(req);
+  if (!isClosingDate(from) || !isClosingDate(to) || from > to) {
+    return res.status(400).json({ error: 'Use a valid date range in YYYY-MM-DD format.' });
+  }
+  try {
+    res.json((await query(
+      `${closingReportSelect} WHERE report_date BETWEEN $1 AND $2 ORDER BY report_date`,
+      [from, to]
+    )).rows);
+  } catch (e) { sendError(res, e); }
+});
+
+api.get('/closing-reports/:date', async (req, res) => {
+  if (!isClosingDate(req.params.date)) return res.status(400).json({ error: 'Enter a valid report date.' });
+  try {
+    const report = (await query(
+      `${closingReportSelect} WHERE report_date = $1`,
+      [req.params.date]
+    )).rows[0];
+    if (!report) return res.sendStatus(404);
+    res.json(report);
+  } catch (e) { sendError(res, e); }
+});
+
+api.post('/closing-reports', async (req, res) => {
+  const body = req.body || {};
+  if (!isClosingDate(body.date)) return res.status(400).json({ error: 'Enter a valid report date.' });
+  const amountFields = [
+    ['openingCash', 'Opening cash'],
+    ['cashSales', 'Cash sales'],
+    ['onlineSales', 'Online sales'],
+    ['sales', 'Total sales'],
+    ['expensesTotal', 'Total expenses'],
+    ['endingCash', 'Ending cash']
+  ];
+  const amounts = {};
+  for (const [field, label] of amountFields) {
+    amounts[field] = parseClosingAmount(body[field]);
+    if (amounts[field] === null) return res.status(400).json({ error: `${label} must be a non-negative amount with at most two decimal places.` });
+  }
+  if (!Array.isArray(body.expenses) || body.expenses.length > 200) {
+    return res.status(400).json({ error: 'Expenses must be a list of no more than 200 entries.' });
+  }
+  const expenses = [];
+  for (const entry of body.expenses) {
+    const supplier = String(entry?.supplier || '').trim();
+    const bill = String(entry?.bill || '').trim();
+    const amount = parseClosingAmount(entry?.amount);
+    if (supplier.length > 150 || bill.length > 100 || amount === null) {
+      return res.status(400).json({ error: 'Each expense needs a valid amount, supplier up to 150 characters, and bill number up to 100 characters.' });
+    }
+    expenses.push({ supplier, bill, amount });
+  }
+  try {
+    const report = (await query(
+      `INSERT INTO daily_closing_reports
+        (report_date, opening_cash, cash_sales, online_sales, total_sales, total_expenses, ending_cash, expenses)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
+       ON CONFLICT (report_date) DO UPDATE SET
+         opening_cash = EXCLUDED.opening_cash,
+         cash_sales = EXCLUDED.cash_sales,
+         online_sales = EXCLUDED.online_sales,
+         total_sales = EXCLUDED.total_sales,
+         total_expenses = EXCLUDED.total_expenses,
+         ending_cash = EXCLUDED.ending_cash,
+         expenses = EXCLUDED.expenses,
+         updated_at = NOW()
+       RETURNING report_date::text AS date, opening_cash AS "openingCash",
+         cash_sales AS "cashSales", online_sales AS "onlineSales", total_sales AS sales,
+         total_expenses AS "expensesTotal", ending_cash AS "endingCash", expenses`,
+      [body.date, amounts.openingCash, amounts.cashSales, amounts.onlineSales,
+        amounts.sales, amounts.expensesTotal, amounts.endingCash, JSON.stringify(expenses)]
+    )).rows[0];
+    res.json(report);
+  } catch (e) { sendError(res, e); }
+});
