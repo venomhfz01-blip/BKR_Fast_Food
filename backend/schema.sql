@@ -198,3 +198,18 @@ WHERE menu_item_id IN (
 DROP INDEX IF EXISTS menu_items_variant_unique_idx;
 CREATE UNIQUE INDEX IF NOT EXISTS menu_items_variant_unique_idx
   ON menu_items (LOWER(BTRIM(category)), LOWER(BTRIM(name)), LOWER(BTRIM(size)));
+
+CREATE TABLE IF NOT EXISTS daily_closing_reports (
+  report_date DATE PRIMARY KEY,
+  opening_cash NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  cash_sales NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  online_sales NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  total_sales NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  total_expenses NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  ending_cash NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  expenses JSONB NOT NULL DEFAULT '[]'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS daily_closing_reports_date_idx
+  ON daily_closing_reports(report_date DESC);
