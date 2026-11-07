@@ -495,6 +495,24 @@ api.get('/orders/sales', async (req, res) => { try { const [from, to] = dateRang
 api.get('/sales/date/:date', async (req, res) => { try { const r = await query('SELECT COALESCE(SUM(total_amount),0) AS "totalSales", COUNT(*)::int AS "orderCount" FROM orders WHERE order_date = $1', [req.params.date]); res.json(r.rows[0]); } catch (e) { sendError(res, e); } });
 api.get('/orders/count', async (req, res) => { try { const [from, to] = dateRange(req); const r = await query('SELECT COUNT(*)::int AS "orderCount" FROM orders WHERE order_date BETWEEN $1 AND $2', [from, to]); res.json(r.rows[0]); } catch (e) { sendError(res, e); } });
 api.get('/orders/item-sales', async (req, res) => { try { const [from, to] = dateRange(req); res.json((await query('SELECT menu_item_name AS "itemName", SUM(quantity)::int AS quantity, SUM(line_total) AS "totalSales" FROM order_items oi JOIN orders o USING (order_id) WHERE o.order_date BETWEEN $1 AND $2 GROUP BY menu_item_name ORDER BY menu_item_name', [from, to])).rows); } catch (e) { sendError(res, e); } });
+api.put('/orders/:id/payment-type', async (req, res) => {
+  const orderId = Number(req.params.id);
+  const paymentType = String(req.body?.paymentType || '').trim();
+  if (!Number.isInteger(orderId) || orderId < 1) return res.status(400).json({ error: 'Invalid order ID.' });
+  if (!['Cash', 'Card', 'Online'].includes(paymentType)) {
+    return res.status(400).json({ error: 'Payment type must be Cash, Card, or Online.' });
+  }
+  try {
+    const result = await query(
+      `UPDATE orders SET payment_type = $1 WHERE order_id = $2
+       RETURNING order_id AS "orderId", order_no AS "orderNo", order_date::text AS "orderDate",
+                 payment_type AS "paymentType", total_amount AS "totalAmount"`,
+      [paymentType, orderId]
+    );
+    if (!result.rowCount) return res.sendStatus(404);
+    res.json(result.rows[0]);
+  } catch (e) { sendError(res, e); }
+});
 api.get('/orders/:id', async (req, res) => { try { const order = (await query('SELECT order_id AS "orderId", order_no AS "orderNo", order_date::text AS "orderDate", order_time::text AS "orderTime", customer_name AS "customerName", order_type AS "orderType", table_number AS "tableNumber", payment_type AS "paymentType", subtotal, discount, delivery_charge AS "deliveryCharge", service_charge_percent AS "serviceChargePercent", service_charge AS "serviceCharge", total_amount AS "totalAmount", status FROM orders WHERE order_id = $1', [req.params.id])).rows[0]; if (!order) return res.sendStatus(404); order.items = (await query('SELECT menu_item_id AS "menuItemId", menu_item_name AS "menuItemName", quantity, unit_price AS "unitPrice", line_total AS "lineTotal" FROM order_items WHERE order_id = $1 ORDER BY order_item_id', [req.params.id])).rows; res.json(order); } catch (e) { sendError(res, e); } });
 api.post('/orders', async (req, res) => {
   const client = await pool.connect();
