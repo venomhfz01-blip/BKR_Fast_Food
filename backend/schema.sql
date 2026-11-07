@@ -26,8 +26,13 @@ CREATE TABLE IF NOT EXISTS inventory_items (
   quantity NUMERIC(12, 3) NOT NULL DEFAULT 0,
   reorder_level NUMERIC(12, 3) NOT NULL DEFAULT 0,
   last_unit_price NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  client_inventory_id TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS client_inventory_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS inventory_items_client_inventory_id_unique_idx
+  ON inventory_items (client_inventory_id) WHERE client_inventory_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS orders (
   order_id SERIAL PRIMARY KEY,
@@ -45,12 +50,16 @@ CREATE TABLE IF NOT EXISTS orders (
   service_charge NUMERIC(12, 2) NOT NULL DEFAULT 0,
   total_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'Completed',
+  client_order_id TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 ALTER TABLE orders ALTER COLUMN order_date SET DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Karachi')::date;
 ALTER TABLE orders ALTER COLUMN order_time SET DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Karachi')::time;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS table_number TEXT NOT NULL DEFAULT '';
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS client_order_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS orders_client_order_id_unique_idx
+  ON orders (client_order_id) WHERE client_order_id IS NOT NULL;
 ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_order_no_key;
 
 CREATE TABLE IF NOT EXISTS order_items (
@@ -69,8 +78,13 @@ CREATE TABLE IF NOT EXISTS stock_ins (
   stock_date DATE NOT NULL DEFAULT CURRENT_DATE,
   remarks TEXT NOT NULL DEFAULT '',
   total_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  client_stock_id TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE stock_ins ADD COLUMN IF NOT EXISTS client_stock_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS stock_ins_client_stock_id_unique_idx
+  ON stock_ins (client_stock_id) WHERE client_stock_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS stock_in_items (
   stock_in_item_id SERIAL PRIMARY KEY,
@@ -84,6 +98,64 @@ CREATE TABLE IF NOT EXISTS stock_in_items (
 
 CREATE INDEX IF NOT EXISTS orders_order_date_idx ON orders(order_date);
 CREATE INDEX IF NOT EXISTS stock_ins_stock_date_idx ON stock_ins(stock_date);
+
+CREATE TABLE IF NOT EXISTS purchase_history_items (
+  item_id SERIAL PRIMARY KEY,
+  item_name TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS purchase_history_items_name_unique
+  ON purchase_history_items (LOWER(BTRIM(item_name)));
+
+CREATE TABLE IF NOT EXISTS purchase_history_records (
+  purchase_id SERIAL PRIMARY KEY,
+  item_id INTEGER NOT NULL REFERENCES purchase_history_items(item_id) ON DELETE CASCADE,
+  purchase_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  quantity NUMERIC(12, 3) NOT NULL CHECK (quantity > 0),
+  unit TEXT NOT NULL,
+  total_paid NUMERIC(12, 2) NOT NULL CHECK (total_paid >= 0),
+  unit_price NUMERIC(18, 4) NOT NULL CHECK (unit_price >= 0),
+  client_purchase_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE purchase_history_records ADD COLUMN IF NOT EXISTS client_purchase_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS purchase_history_records_client_purchase_id_unique_idx
+  ON purchase_history_records (client_purchase_id) WHERE client_purchase_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS purchase_history_records_item_date_idx
+  ON purchase_history_records(item_id, purchase_date DESC, purchase_id DESC);
+
+CREATE TABLE IF NOT EXISTS daily_closing_reports (
+  report_date DATE PRIMARY KEY,
+  opening_cash NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  cash_sales NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  online_sales NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  total_sales NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  total_expenses NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  ending_cash NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  expenses JSONB NOT NULL DEFAULT '[]'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS inventory_adjustments (
+  client_adjustment_id TEXT PRIMARY KEY,
+  item_name TEXT NOT NULL,
+  quantity_delta NUMERIC(12, 3) NOT NULL,
+  adjustment_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  note TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS offline_sync_operations (
+  client_operation_id TEXT PRIMARY KEY,
+  operation_type TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS daily_closing_reports_date_idx
+  ON daily_closing_reports(report_date DESC);
 
 WITH duplicate_pizza_prices AS (
   SELECT menu_item_id,
