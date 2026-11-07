@@ -22,6 +22,10 @@ npm start
 
 The health endpoint is `GET /health`.
 
+## Order payment type
+
+- `PUT /api/orders/:id/payment-type` updates an order’s payment type. Send `{ "paymentType": "Cash" }`; supported values are `Cash`, `Card`, and `Online`. The response includes the order ID, order number, date, payment type, and total amount.
+
 ## Item purchase history
 
 Purchase items and their records are stored in PostgreSQL and shared by both clients. The server creates the required tables and indexes from `schema.sql` at startup.
