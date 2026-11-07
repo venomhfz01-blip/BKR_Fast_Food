@@ -15,9 +15,10 @@ import java.util.Properties;
 
 public class ApiClient {
     private static final String CONFIG_FILE = "config.properties";
-    private static String serverUrl = "https://bkr-fastfood-backend.onrender.com/api";
-    private static String serverHost = "bkr-fastfood-backend.onrender.com";
+    private static String serverUrl = "https://bkr-fastfood-backend-6snv.onrender.com/api";
+    private static String serverHost = "bkr-fastfood-backend-6snv.onrender.com";
     private static int serverPort = 443;
+    private static volatile boolean offlineMode;
     private static final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(6L)).build();
 
     public static synchronized void loadConfig() {
@@ -26,6 +27,7 @@ public class ApiClient {
             try (FileInputStream fileInputStream = new FileInputStream(file);){
                 Properties properties = new Properties();
                 properties.load(fileInputStream);
+                offlineMode = Boolean.parseBoolean(properties.getProperty("offline.mode", "false"));
                 String string = properties.getProperty("server.url");
                 if (string != null && !string.isBlank()) {
                     ApiClient.setServerUrl(string);
@@ -40,6 +42,7 @@ public class ApiClient {
                 ApiClient.updateUrlFromHostAndPort();
             }
         } else {
+            offlineMode = false;
             ApiClient.updateUrlFromHostAndPort();
         }
     }
@@ -47,6 +50,7 @@ public class ApiClient {
     public static synchronized void saveConfig(String string, int n) {
         String string2 = string != null ? string.trim() : "localhost";
         Properties properties = new Properties();
+        properties.setProperty("offline.mode", Boolean.toString(offlineMode));
         if (string2.startsWith("http://") || string2.startsWith("https://") || string2.contains("/")) {
             ApiClient.setServerUrl(string2);
             properties.setProperty("server.url", serverUrl);
@@ -112,43 +116,86 @@ public class ApiClient {
     }
 
     public static String get(String string) throws Exception {
-        Object object = string.startsWith("/") ? string : "/" + string;
-        String string2 = serverUrl + (String)object;
-        HttpRequest httpRequest = HttpRequest.newBuilder().uri(URI.create(string2)).timeout(Duration.ofSeconds(12L)).header("Accept", "application/json").GET().build();
-        HttpResponse<String> httpResponse = client.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        if (httpResponse.statusCode() >= 400) {
-            throw new RuntimeException("Server Error (" + httpResponse.statusCode() + "): " + httpResponse.body());
-        }
-        return httpResponse.body();
+        String path = normalizePath(string);
+        if (offlineMode) return OfflineStore.handle("GET", path, "");
+        return send("GET", path, "");
     }
 
     public static String post(String string, String string2) throws Exception {
-        Object object = string.startsWith("/") ? string : "/" + string;
-        String string3 = serverUrl + (String)object;
-        HttpRequest httpRequest = HttpRequest.newBuilder().uri(URI.create(string3)).timeout(Duration.ofSeconds(15L)).header("Content-Type", "application/json").header("Accept", "application/json").POST(HttpRequest.BodyPublishers.ofString(string2 != null ? string2 : "")).build();
-        HttpResponse<String> httpResponse = client.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        if (httpResponse.statusCode() >= 400) {
-            throw new RuntimeException("Server Error (" + httpResponse.statusCode() + "): " + httpResponse.body());
-        }
-        return httpResponse.body();
+        String path = normalizePath(string);
+        if (offlineMode) return OfflineStore.handle("POST", path, string2);
+        return send("POST", path, string2);
     }
 
     public static String put(String string, String string2) throws Exception {
-        Object object = string.startsWith("/") ? string : "/" + string;
-        String string3 = serverUrl + (String)object;
-        HttpRequest httpRequest = HttpRequest.newBuilder().uri(URI.create(string3)).timeout(Duration.ofSeconds(12L)).header("Content-Type", "application/json").header("Accept", "application/json").PUT(HttpRequest.BodyPublishers.ofString(string2 != null ? string2 : "")).build();
-        HttpResponse<String> httpResponse = client.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        if (httpResponse.statusCode() >= 400) {
-            throw new RuntimeException("Server Error (" + httpResponse.statusCode() + "): " + httpResponse.body());
-        }
-        return httpResponse.body();
+        String path = normalizePath(string);
+        if (offlineMode) return OfflineStore.handle("PUT", path, string2);
+        return send("PUT", path, string2);
     }
 
     public static String delete(String string) throws Exception {
-        Object object = string.startsWith("/") ? string : "/" + string;
-        String string2 = serverUrl + (String)object;
-        HttpRequest httpRequest = HttpRequest.newBuilder().uri(URI.create(string2)).timeout(Duration.ofSeconds(12L)).header("Accept", "application/json").DELETE().build();
-        HttpResponse<String> httpResponse = client.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+        String path = normalizePath(string);
+        if (offlineMode) return OfflineStore.handle("DELETE", path, "");
+        return send("DELETE", path, "");
+    }
+
+    public static String getOnline(String path) throws Exception {
+        return send("GET", normalizePath(path), "");
+    }
+
+    public static String postOnline(String path, String body) throws Exception {
+        return send("POST", normalizePath(path), body);
+    }
+
+    public static String putOnline(String path, String body) throws Exception {
+        return send("PUT", normalizePath(path), body);
+    }
+
+    public static String deleteOnline(String path) throws Exception {
+        return send("DELETE", normalizePath(path), "");
+    }
+
+    public static synchronized boolean isOfflineMode() {
+        return offlineMode;
+    }
+
+    public static synchronized void setOfflineMode(boolean offline) throws Exception {
+        if (offline && !OfflineStore.isReady()) {
+            throw new IllegalStateException("Prepare offline data while connected to the server before switching to Offline mode.");
+        }
+        Properties properties = new Properties();
+        File file = new File(CONFIG_FILE);
+        if (file.exists()) {
+            try (FileInputStream input = new FileInputStream(file)) {
+                properties.load(input);
+            }
+        }
+        properties.putIfAbsent("server.url", serverUrl);
+        properties.putIfAbsent("server.host", serverHost);
+        properties.putIfAbsent("server.port", String.valueOf(serverPort));
+        properties.setProperty("offline.mode", Boolean.toString(offline));
+        try (FileOutputStream output = new FileOutputStream(file)) {
+            properties.store(output, "BKR Fast Food Client Configuration");
+        }
+        offlineMode = offline;
+    }
+
+    private static String normalizePath(String path) {
+        return path.startsWith("/") ? path : "/" + path;
+    }
+
+    private static String send(String method, String path, String body) throws Exception {
+        String url = serverUrl + path;
+        HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create(url))
+            .timeout(Duration.ofSeconds(method.equals("POST") ? 15L : 12L))
+            .header("Accept", "application/json");
+        if ("GET".equals(method)) builder.GET();
+        else if ("POST".equals(method)) builder.header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(body != null ? body : ""));
+        else if ("PUT".equals(method)) builder.header("Content-Type", "application/json")
+            .PUT(HttpRequest.BodyPublishers.ofString(body != null ? body : ""));
+        else builder.DELETE();
+        HttpResponse<String> httpResponse = client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
         if (httpResponse.statusCode() >= 400) {
             throw new RuntimeException("Server Error (" + httpResponse.statusCode() + "): " + httpResponse.body());
         }
@@ -157,7 +204,7 @@ public class ApiClient {
 
     public static boolean testConnection() {
         try {
-            ApiClient.get("/inventory");
+            ApiClient.getOnline("/inventory");
             return true;
         }
         catch (Exception exception) {
@@ -169,4 +216,3 @@ public class ApiClient {
         ApiClient.loadConfig();
     }
 }
-
