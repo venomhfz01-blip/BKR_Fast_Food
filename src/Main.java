@@ -10,19 +10,23 @@ import javax.swing.plaf.FontUIResource;
 import ui.MainFrame;
 import util.SeedBKRMenu;
 import dao.MenuDAO;
+import api.ApiClient;
+import api.OfflineStore;
+import api.OfflineSyncService;
 
 public class Main {
     public static void main(String[] stringArray) {
         // Auto-seed menu if empty
-        new Thread(() -> {
+        if (!ApiClient.isOfflineMode()) new Thread(() -> {
             try {
                 MenuDAO dao = new MenuDAO();
                 if (dao.getAllActiveMenuItems().isEmpty()) {
                     System.out.println("Menu is empty. Auto-seeding BKR flyer menu items...");
                     SeedBKRMenu.main(new String[0]);
                 }
+                if (!OfflineStore.isReady()) OfflineSyncService.prepareOfflineData();
             } catch (Exception e) {
-                System.err.println("Auto-seed check note: " + e.getMessage());
+                System.err.println("Offline cache refresh skipped: " + e.getMessage());
             }
         }).start();
 
@@ -50,4 +54,3 @@ public class Main {
         });
     }
 }
-
