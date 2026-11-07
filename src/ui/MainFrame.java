@@ -4,6 +4,7 @@
 package ui;
 
 import api.ApiClient;
+import api.OfflineStore;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
@@ -41,7 +42,12 @@ extends JFrame {
     private OrderHistoryPanel orderHistoryPanel;
     private SalesReportPanel salesReportPanel;
     private MenuManagementPanel menuManagementPanel;
+    private ItemPurchaseHistoryPanel itemPurchaseHistoryPanel;
+    private DailyClosingReportPanel dailyClosingReportPanel;
+    private ClosingMonthlySummaryPanel closingMonthlySummaryPanel;
     private JLabel serverStatusLabel;
+    private JButton modeButton;
+    private JTabbedPane tabs;
 
     public MainFrame() {
         this.setTitle("BKR BACHA KHAN RESTAURANT & FAST FOOD");
@@ -52,6 +58,7 @@ extends JFrame {
         this.getContentPane().setBackground(UIHelper.DARK_BG);
 
         JTabbedPane jTabbedPane = new JTabbedPane();
+        this.tabs = jTabbedPane;
         jTabbedPane.setFont(new Font("Segoe UI", Font.BOLD, 14));
         jTabbedPane.setBackground(UIHelper.DARK_BG);
         jTabbedPane.setForeground(UIHelper.BKR_RED);
@@ -112,6 +119,9 @@ extends JFrame {
             this.viewInventoryPanel.refresh();
         });
         this.menuManagementPanel = new MenuManagementPanel(() -> this.newOrderPanel.refreshMenuComboPublic());
+        this.itemPurchaseHistoryPanel = new ItemPurchaseHistoryPanel();
+        this.dailyClosingReportPanel = new DailyClosingReportPanel();
+        this.closingMonthlySummaryPanel = new ClosingMonthlySummaryPanel();
         
         jTabbedPane.addTab("New Order", this.newOrderPanel);
         jTabbedPane.addTab("Order History", this.orderHistoryPanel);
@@ -120,34 +130,12 @@ extends JFrame {
         jTabbedPane.addTab("Inventory", this.viewInventoryPanel);
         jTabbedPane.addTab("Add Stock", this.stockInPanel);
         jTabbedPane.addTab("Inventory History", this.billHistoryPanel);
+        jTabbedPane.addTab("Item Purchase History", this.itemPurchaseHistoryPanel);
+        jTabbedPane.addTab("Daily Closing Report", this.dailyClosingReportPanel);
+        jTabbedPane.addTab("Closing Monthly Summary", this.closingMonthlySummaryPanel);
         
         jTabbedPane.addChangeListener(changeEvent -> {
-            int n = jTabbedPane.getSelectedIndex();
-            switch (n) {
-                case 0: {
-                    this.newOrderPanel.refreshMenuComboPublic();
-                    break;
-                }
-                case 1: {
-                    this.orderHistoryPanel.refresh();
-                    break;
-                }
-                case 2: {
-                    this.salesReportPanel.refresh();
-                    break;
-                }
-                case 3: {
-                    this.menuManagementPanel.refresh();
-                    break;
-                }
-                case 4: {
-                    this.viewInventoryPanel.refresh();
-                    break;
-                }
-                case 6: {
-                    this.billHistoryPanel.refresh();
-                }
-            }
+            this.refreshTab(jTabbedPane.getSelectedIndex());
         });
         this.getContentPane().setLayout(new BorderLayout());
         this.getContentPane().add((Component)this.buildHeaderPanel(), "North");
@@ -220,13 +208,75 @@ extends JFrame {
 
         JButton serverBtn = UIHelper.createButton("Server Connection", UIHelper.BKR_RED_DARK, Color.WHITE, 12);
         serverBtn.addActionListener(actionEvent -> this.showServerSettingsDialog());
+        this.modeButton = UIHelper.createButton("", UIHelper.BKR_GOLD, Color.BLACK, 12);
+        this.modeButton.addActionListener(actionEvent -> this.toggleMode());
+        JButton syncButton = UIHelper.createButton("Sync Center", UIHelper.BKR_RED_DARK, Color.WHITE, 12);
+        syncButton.addActionListener(actionEvent -> new OfflineSyncCenterDialog(this).setVisible(true));
 
         rightBox.add(this.serverStatusLabel);
+        rightBox.add(this.modeButton);
+        rightBox.add(syncButton);
         rightBox.add(serverBtn);
+        this.updateModeDisplay();
 
         jPanel.add(brandBox, BorderLayout.WEST);
         jPanel.add(rightBox, BorderLayout.EAST);
         return jPanel;
+    }
+
+    private void toggleMode() {
+        boolean offline = !ApiClient.isOfflineMode();
+        String message = offline
+            ? "Switch to Offline mode? Orders and inventory changes will be saved on this computer until you sync."
+            : "Switch to Server mode? New changes will be sent directly to the server.";
+        if (JOptionPane.showConfirmDialog(this, message, "Change Working Mode",
+                JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE) != JOptionPane.YES_OPTION) return;
+        try {
+            ApiClient.setOfflineMode(offline);
+            this.updateModeDisplay();
+            this.refreshTab(this.tabs.getSelectedIndex());
+            if (!offline && OfflineStore.getPendingCount() > 0) {
+                JOptionPane.showMessageDialog(this,
+                    OfflineStore.getPendingCount() + " offline change(s) are still waiting. Open Sync Center to send them.",
+                    "Changes Still Pending", JOptionPane.INFORMATION_MESSAGE);
+            }
+        } catch (Exception exception) {
+            JOptionPane.showMessageDialog(this, exception.getMessage(), "Mode Change Failed", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private void updateModeDisplay() {
+        boolean offline = ApiClient.isOfflineMode();
+        this.modeButton.setText(offline ? "Offline Mode" : "Server Mode");
+        this.modeButton.setBackground(offline ? new Color(255, 220, 125) : new Color(221, 240, 222));
+        this.modeButton.setForeground(Color.BLACK);
+        this.serverStatusLabel.setText((offline ? "\u25cf  Offline  |  " : "\u25cf  Server: ")
+            + (offline ? OfflineStore.getPendingCount() + " pending"
+                : ApiClient.getServerHost() + ":" + ApiClient.getServerPort()
+                    + "  |  " + OfflineStore.getPendingCount() + " pending"));
+        this.serverStatusLabel.setForeground(offline ? new Color(140, 90, 0) : new Color(60, 130, 70));
+    }
+
+    public void refreshOfflineStatus() {
+        this.updateModeDisplay();
+    }
+
+    private void refreshTab(int index) {
+        switch (index) {
+            case 0: this.newOrderPanel.refreshMenuComboPublic(); break;
+            case 1: this.orderHistoryPanel.refresh(); break;
+            case 2: this.salesReportPanel.refresh(); break;
+            case 3: this.menuManagementPanel.refresh(); break;
+            case 4: this.viewInventoryPanel.refresh(); break;
+            case 6: this.billHistoryPanel.refresh(); break;
+            case 7:
+                this.itemPurchaseHistoryPanel.refreshDates();
+                this.itemPurchaseHistoryPanel.refresh();
+                break;
+            case 8: this.dailyClosingReportPanel.refresh(); break;
+            case 9: this.closingMonthlySummaryPanel.refresh(); break;
+            default: break;
+        }
     }
 
     private void showServerSettingsDialog() {
@@ -244,7 +294,7 @@ extends JFrame {
                 string = "http://localhost:8080/api";
             }
             ApiClient.saveConfig(string, 0);
-            this.serverStatusLabel.setText("\u25cf  Server: " + ApiClient.getServerHost() + ":" + ApiClient.getServerPort());
+            this.updateModeDisplay();
             if (ApiClient.testConnection()) {
                 JOptionPane.showMessageDialog(this, "Successfully connected to BKR Backend Server!\n" + ApiClient.getBaseUrl(), "Connected", 1);
             } else {
@@ -255,4 +305,3 @@ extends JFrame {
         }
     }
 }
-
