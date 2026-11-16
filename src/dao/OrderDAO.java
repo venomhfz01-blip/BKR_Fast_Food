@@ -8,8 +8,10 @@ import api.SimpleJson;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import model.Order;
 import model.OrderItem;
@@ -27,6 +29,10 @@ public class OrderDAO {
     }
 
     public int saveOrder(Order order) {
+        return saveOrder(order, false);
+    }
+
+    public int saveOrder(Order order, boolean allowDuplicate) {
         try {
             Object object;
             StringBuilder stringBuilder = new StringBuilder();
@@ -42,6 +48,7 @@ public class OrderDAO {
             stringBuilder.append("\"serviceChargePercent\":").append(order.getServiceChargePercent() != null ? order.getServiceChargePercent().toPlainString() : "0").append(",");
             stringBuilder.append("\"serviceCharge\":").append(order.getServiceCharge() != null ? order.getServiceCharge().toPlainString() : "0").append(",");
             stringBuilder.append("\"totalAmount\":").append(order.getTotalAmount() != null ? order.getTotalAmount().toPlainString() : "0").append(",");
+            stringBuilder.append("\"allowDuplicate\":").append(allowDuplicate).append(",");
             stringBuilder.append("\"items\":[");
             List<OrderItem> list = order.getItems();
             for (int i = 0; i < list.size(); ++i) {
@@ -68,6 +75,87 @@ public class OrderDAO {
         catch (Exception exception) {
             throw new RuntimeException("Failed to save order: " + exception.getMessage(), exception);
         }
+    }
+
+    public Order findPossibleDuplicate(Order candidate) throws Exception {
+        return findPossibleDuplicate(candidate, false, null);
+    }
+
+    public Order findPossibleDuplicateOnline(Map<String, Object> candidate) throws Exception {
+        return findPossibleDuplicate(mapOrder(candidate), true,
+            SimpleJson.getString(candidate, "clientOrderId", ""));
+    }
+
+    private Order findPossibleDuplicate(Order candidate, boolean online, String clientOrderId) throws Exception {
+        if (candidate == null || candidate.getOrderDate() == null) {
+            throw new IllegalArgumentException("An order date is required to check for duplicate orders.");
+        }
+
+        String date = candidate.getOrderDate().toString();
+        String path = "/orders/range?from=" + date + "&to=" + date;
+        String response = online ? ApiClient.getOnline(path) : ApiClient.get(path);
+        for (Order summary : parseOrderList(response)) {
+            if (!sameOrderHeader(candidate, summary)) continue;
+
+            String detailPath = "/orders/" + summary.getOrderId();
+            String details = online ? ApiClient.getOnline(detailPath) : ApiClient.get(detailPath);
+            Order existing = parseFullOrder(details);
+            if (existing == null) {
+                throw new IllegalStateException("The server returned an empty order while checking for duplicates.");
+            }
+            if (online && clientOrderId != null && !clientOrderId.isBlank()
+                    && clientOrderId.equals(existing.getClientOrderId())) continue;
+            if (sameOrderItems(candidate, existing)) return existing;
+        }
+        return null;
+    }
+
+    private static boolean sameOrderHeader(Order left, Order right) {
+        return sameText(left.getCustomerName(), right.getCustomerName())
+            && sameText(left.getOrderType(), right.getOrderType())
+            && sameText(left.getTableNumber(), right.getTableNumber())
+            && sameText(left.getPaymentType(), right.getPaymentType())
+            && sameText(left.getStatus(), right.getStatus())
+            && sameAmount(left.getSubtotal(), right.getSubtotal())
+            && sameAmount(left.getDiscount(), right.getDiscount())
+            && sameAmount(left.getDeliveryCharge(), right.getDeliveryCharge())
+            && sameAmount(left.getServiceChargePercent(), right.getServiceChargePercent())
+            && sameAmount(left.getServiceCharge(), right.getServiceCharge())
+            && sameAmount(left.getTotalAmount(), right.getTotalAmount());
+    }
+
+    private static boolean sameOrderItems(Order left, Order right) {
+        List<String> leftItems = itemFingerprints(left);
+        List<String> rightItems = itemFingerprints(right);
+        Collections.sort(leftItems);
+        Collections.sort(rightItems);
+        return leftItems.equals(rightItems);
+    }
+
+    private static List<String> itemFingerprints(Order order) {
+        List<String> fingerprints = new ArrayList<>();
+        for (OrderItem item : order.getItems()) {
+            fingerprints.add(normalizeText(item.getMenuItemName()) + "\u0000"
+                + item.getQuantity() + "\u0000" + amountKey(item.getUnitPrice())
+                + "\u0000" + amountKey(item.getLineTotal()));
+        }
+        return fingerprints;
+    }
+
+    private static boolean sameText(String left, String right) {
+        return normalizeText(left).equals(normalizeText(right));
+    }
+
+    private static String normalizeText(String value) {
+        return value == null ? "" : value.trim().replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+    }
+
+    private static boolean sameAmount(BigDecimal left, BigDecimal right) {
+        return left == null ? right == null : right != null && left.compareTo(right) == 0;
+    }
+
+    private static String amountKey(BigDecimal value) {
+        return value == null ? "" : value.stripTrailingZeros().toPlainString();
     }
 
     public List<Order> getOrdersBetween(LocalDate localDate, LocalDate localDate2) {
@@ -184,6 +272,7 @@ public class OrderDAO {
         order.setServiceCharge(SimpleJson.getBigDecimal(map, "serviceCharge", BigDecimal.ZERO));
         order.setTotalAmount(SimpleJson.getBigDecimal(map, "totalAmount", BigDecimal.ZERO));
         order.setStatus(SimpleJson.getString(map, "status", "Completed"));
+        order.setClientOrderId(SimpleJson.getString(map, "clientOrderId", null));
         Object object = map.get("items");
         if (object instanceof List) {
             for (Object e : (List)object) {
@@ -200,4 +289,3 @@ public class OrderDAO {
         return order;
     }
 }
-

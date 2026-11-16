@@ -788,7 +788,20 @@ extends JPanel {
             order.setServiceChargePercent((BigDecimal)(this.serviceChargeCheck.isSelected() ? object : BigDecimal.ZERO));
             order.setServiceCharge(this.serviceChargeCheck.isSelected() ? bigDecimal : BigDecimal.ZERO);
             order.setTotalAmount(bigDecimal6);
-            this.orderDAO.saveOrder(order);
+            Order possibleDuplicate = this.orderDAO.findPossibleDuplicate(order);
+            boolean allowDuplicate = false;
+            if (possibleDuplicate != null) {
+                String existingTime = possibleDuplicate.getOrderTime() == null
+                    ? "" : " at " + possibleDuplicate.getOrderTime();
+                int choice = JOptionPane.showConfirmDialog(this,
+                    "Order " + possibleDuplicate.getOrderNo() + existingTime
+                        + " has the same customer, order type, payment, totals, and items. "
+                        + "Save this order too?",
+                    "Possible Duplicate Order", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+                if (choice != JOptionPane.YES_OPTION) return;
+                allowDuplicate = true;
+            }
+            this.orderDAO.saveOrder(order, allowDuplicate);
             if (printBill) {
                 BillPrinter.showOrderBill(this, order);
             }
@@ -820,4 +833,3 @@ extends JPanel {
         }
     }
 }
-

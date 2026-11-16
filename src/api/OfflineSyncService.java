@@ -1,12 +1,19 @@
 package api;
 
+import dao.OrderDAO;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import model.Order;
 
 public final class OfflineSyncService {
+    @FunctionalInterface
+    public interface DuplicateOrderConfirmation {
+        boolean confirm(Map<String, Object> pendingOrder, Order existingOrder);
+    }
+
     private OfflineSyncService() {
     }
 
@@ -16,11 +23,15 @@ public final class OfflineSyncService {
     }
 
     public static List<String> syncPending() {
-        return syncPending(null);
+        return syncPending(null, null);
     }
 
     public static List<String> syncOrders() {
-        return syncPending(Set.of("order"));
+        return syncOrders(null);
+    }
+
+    public static List<String> syncOrders(DuplicateOrderConfirmation confirmation) {
+        return syncPending(Set.of("order"), confirmation);
     }
 
     public static List<String> syncInventoryChanges() {
@@ -29,6 +40,15 @@ public final class OfflineSyncService {
     }
 
     private static List<String> syncPending(Set<String> selectedTypes) {
+        return syncPending(selectedTypes, null);
+    }
+
+    public static List<String> syncPending(DuplicateOrderConfirmation confirmation) {
+        return syncPending(null, confirmation);
+    }
+
+    private static List<String> syncPending(Set<String> selectedTypes,
+            DuplicateOrderConfirmation confirmation) {
         List<String> results = new ArrayList<>();
         for (Map<String, Object> record : OfflineStore.pendingRecords()) {
             String clientId = value(record.get("clientId"));
@@ -36,6 +56,22 @@ public final class OfflineSyncService {
             if (selectedTypes != null && !selectedTypes.contains(type)) continue;
             Map<String, Object> data = map(record.get("data"));
             try {
+                if ("order".equals(type)) {
+                    data.put("clientOrderId", clientId);
+                    Order existing = new OrderDAO().findPossibleDuplicateOnline(data);
+                    if (existing != null) {
+                        boolean approved = confirmation != null && confirmation.confirm(data, existing);
+                        if (!approved) {
+                            results.add("Skipped possible duplicate order " + value(data.get("orderNo"))
+                                + "; it still matches existing order " + existing.getOrderNo()
+                                + " and remains pending.");
+                            continue;
+                        }
+                        data.put("allowDuplicate", true);
+                    } else {
+                        data.put("allowDuplicate", false);
+                    }
+                }
                 Map<String, Object> response = syncOne(type, clientId, data);
                 OfflineStore.markSynced(clientId, response);
                 results.add("Synced " + type + " (" + clientId + ").");

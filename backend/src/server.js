@@ -28,6 +28,23 @@ const query = (text, values = []) => {
 const number = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
 const dateRange = (req) => [req.query.from || req.query.startDate || req.query.date || '1900-01-01', req.query.to || req.query.endDate || req.query.date || '2999-12-31'];
 const sendError = (res, error) => res.status(error.code === '23505' ? 409 : 500).json({ error: error.message });
+const normalizedOrderText = (value) => String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+const orderAmountKey = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed.toFixed(2) : '0.00';
+};
+const sameOrderItems = (submitted, existing) => {
+  if (!Array.isArray(submitted) || submitted.length === 0 || submitted.length !== existing.length) return false;
+  const fingerprint = (item) => [
+    normalizedOrderText(item.menuItemName),
+    number(item.quantity, 1),
+    orderAmountKey(item.unitPrice),
+    orderAmountKey(item.lineTotal)
+  ].join('\u0000');
+  const submittedItems = submitted.map(fingerprint).sort();
+  const existingItems = existing.map(fingerprint).sort();
+  return submittedItems.every((item, index) => item === existingItems[index]);
+};
 
 const menuSelect = `SELECT DISTINCT ON (LOWER(BTRIM(category)), LOWER(BTRIM(name)), LOWER(BTRIM(size))) menu_item_id AS "menuItemId", name, category, price, size, active FROM menu_items`;
 const inventorySelect = `SELECT item_id AS "itemId", item_name AS "itemName", quantity, reorder_level AS "reorderLevel", last_unit_price AS "lastUnitPrice" FROM inventory_items`;
@@ -489,8 +506,8 @@ const decrementInventory = async (client, item, quantity) => {
 api.get('/orders/generate-no', async (_req, res) => {
   try { res.json({ orderNo: await nextOrderNo() }); } catch (e) { sendError(res, e); }
 });
-api.get('/orders', async (req, res) => { try { const [from, to] = dateRange(req); res.json((await query('SELECT order_id AS "orderId", order_no AS "orderNo", order_date::text AS "orderDate", order_time::text AS "orderTime", customer_name AS "customerName", order_type AS "orderType", table_number AS "tableNumber", payment_type AS "paymentType", subtotal, discount, delivery_charge AS "deliveryCharge", service_charge_percent AS "serviceChargePercent", service_charge AS "serviceCharge", total_amount AS "totalAmount", status FROM orders WHERE order_date BETWEEN $1 AND $2 ORDER BY order_date DESC, order_time DESC', [from, to])).rows); } catch (e) { sendError(res, e); } });
-api.get('/orders/range', async (req, res) => { try { const [from, to] = dateRange(req); res.json((await query('SELECT order_id AS "orderId", order_no AS "orderNo", order_date::text AS "orderDate", order_time::text AS "orderTime", customer_name AS "customerName", order_type AS "orderType", table_number AS "tableNumber", payment_type AS "paymentType", subtotal, discount, delivery_charge AS "deliveryCharge", service_charge_percent AS "serviceChargePercent", service_charge AS "serviceCharge", total_amount AS "totalAmount", status FROM orders WHERE order_date BETWEEN $1 AND $2 ORDER BY order_date DESC, order_time DESC', [from, to])).rows); } catch (e) { sendError(res, e); } });
+api.get('/orders', async (req, res) => { try { const [from, to] = dateRange(req); res.json((await query('SELECT order_id AS "orderId", order_no AS "orderNo", order_date::text AS "orderDate", order_time::text AS "orderTime", customer_name AS "customerName", order_type AS "orderType", table_number AS "tableNumber", payment_type AS "paymentType", subtotal, discount, delivery_charge AS "deliveryCharge", service_charge_percent AS "serviceChargePercent", service_charge AS "serviceCharge", total_amount AS "totalAmount", status, client_order_id AS "clientOrderId" FROM orders WHERE order_date BETWEEN $1 AND $2 ORDER BY order_date DESC, order_time DESC', [from, to])).rows); } catch (e) { sendError(res, e); } });
+api.get('/orders/range', async (req, res) => { try { const [from, to] = dateRange(req); res.json((await query('SELECT order_id AS "orderId", order_no AS "orderNo", order_date::text AS "orderDate", order_time::text AS "orderTime", customer_name AS "customerName", order_type AS "orderType", table_number AS "tableNumber", payment_type AS "paymentType", subtotal, discount, delivery_charge AS "deliveryCharge", service_charge_percent AS "serviceChargePercent", service_charge AS "serviceCharge", total_amount AS "totalAmount", status, client_order_id AS "clientOrderId" FROM orders WHERE order_date BETWEEN $1 AND $2 ORDER BY order_date DESC, order_time DESC', [from, to])).rows); } catch (e) { sendError(res, e); } });
 api.get('/orders/sales', async (req, res) => { try { const [from, to] = dateRange(req); const r = await query('SELECT COALESCE(SUM(total_amount),0) AS "totalSales" FROM orders WHERE order_date BETWEEN $1 AND $2', [from, to]); res.json(r.rows[0]); } catch (e) { sendError(res, e); } });
 api.get('/sales/date/:date', async (req, res) => { try { const r = await query('SELECT COALESCE(SUM(total_amount),0) AS "totalSales", COUNT(*)::int AS "orderCount" FROM orders WHERE order_date = $1', [req.params.date]); res.json(r.rows[0]); } catch (e) { sendError(res, e); } });
 api.get('/orders/count', async (req, res) => { try { const [from, to] = dateRange(req); const r = await query('SELECT COUNT(*)::int AS "orderCount" FROM orders WHERE order_date BETWEEN $1 AND $2', [from, to]); res.json(r.rows[0]); } catch (e) { sendError(res, e); } });
@@ -513,7 +530,7 @@ api.put('/orders/:id/payment-type', async (req, res) => {
     res.json(result.rows[0]);
   } catch (e) { sendError(res, e); }
 });
-api.get('/orders/:id', async (req, res) => { try { const order = (await query('SELECT order_id AS "orderId", order_no AS "orderNo", order_date::text AS "orderDate", order_time::text AS "orderTime", customer_name AS "customerName", order_type AS "orderType", table_number AS "tableNumber", payment_type AS "paymentType", subtotal, discount, delivery_charge AS "deliveryCharge", service_charge_percent AS "serviceChargePercent", service_charge AS "serviceCharge", total_amount AS "totalAmount", status FROM orders WHERE order_id = $1', [req.params.id])).rows[0]; if (!order) return res.sendStatus(404); order.items = (await query('SELECT menu_item_id AS "menuItemId", menu_item_name AS "menuItemName", quantity, unit_price AS "unitPrice", line_total AS "lineTotal" FROM order_items WHERE order_id = $1 ORDER BY order_item_id', [req.params.id])).rows; res.json(order); } catch (e) { sendError(res, e); } });
+api.get('/orders/:id', async (req, res) => { try { const order = (await query('SELECT order_id AS "orderId", order_no AS "orderNo", order_date::text AS "orderDate", order_time::text AS "orderTime", customer_name AS "customerName", order_type AS "orderType", table_number AS "tableNumber", payment_type AS "paymentType", subtotal, discount, delivery_charge AS "deliveryCharge", service_charge_percent AS "serviceChargePercent", service_charge AS "serviceCharge", total_amount AS "totalAmount", status, client_order_id AS "clientOrderId" FROM orders WHERE order_id = $1', [req.params.id])).rows[0]; if (!order) return res.sendStatus(404); order.items = (await query('SELECT menu_item_id AS "menuItemId", menu_item_name AS "menuItemName", quantity, unit_price AS "unitPrice", line_total AS "lineTotal" FROM order_items WHERE order_id = $1 ORDER BY order_item_id', [req.params.id])).rows; res.json(order); } catch (e) { sendError(res, e); } });
 api.post('/orders', async (req, res) => {
   const client = await pool.connect();
   try {
@@ -533,9 +550,50 @@ api.post('/orders', async (req, res) => {
         await client.query('COMMIT');
         return res.json(existing);
       }
-    } else {
-      await client.query("SELECT pg_advisory_xact_lock(hashtext('orders-' || (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Karachi')::date::text))");
     }
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext(
+         'orders-' || COALESCE($1::date::text, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Karachi')::date::text)
+       ))`,
+      [b.orderDate || null]
+    );
+
+    if (b.allowDuplicate !== true) {
+      const candidates = (await client.query(
+        `SELECT order_id AS "orderId", order_no AS "orderNo", order_date::text AS "orderDate",
+                order_time::text AS "orderTime"
+         FROM orders
+         WHERE order_date = COALESCE($1::date, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Karachi')::date)
+           AND customer_name = $2 AND order_type = $3 AND table_number = $4 AND payment_type = $5
+           AND subtotal = $6 AND discount = $7 AND delivery_charge = $8
+           AND service_charge_percent = $9 AND service_charge = $10 AND total_amount = $11
+           AND status = $12
+         ORDER BY order_time, order_id`,
+        [
+          b.orderDate || null, b.customerName || '', b.orderType || 'Dine In',
+          b.tableNumber || '', b.paymentType || 'Cash', number(b.subtotal),
+          number(b.discount), number(b.deliveryCharge), number(b.serviceChargePercent),
+          number(b.serviceCharge), number(b.totalAmount), b.status || 'Completed'
+        ]
+      )).rows;
+
+      for (const candidate of candidates) {
+        const existingItems = (await client.query(
+          `SELECT menu_item_name AS "menuItemName", quantity, unit_price AS "unitPrice",
+                  line_total AS "lineTotal"
+           FROM order_items WHERE order_id = $1 ORDER BY order_item_id`,
+          [candidate.orderId]
+        )).rows;
+        if (!sameOrderItems(b.items || [], existingItems)) continue;
+
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          error: `This order matches existing order ${candidate.orderNo}. Confirm it explicitly to save another copy.`,
+          duplicateOrder: candidate
+        });
+      }
+    }
+
     const orderNo = clientOrderId && b.orderNo ? String(b.orderNo) : await nextOrderNo(client);
     const order = (await client.query(
       `INSERT INTO orders

@@ -26,6 +26,7 @@ public class Order {
     private BigDecimal serviceCharge = BigDecimal.ZERO;
     private BigDecimal totalAmount = BigDecimal.ZERO;
     private String status = "Completed";
+    private String clientOrderId;
     private boolean notified;
     private List<OrderItem> items = new ArrayList<OrderItem>();
 
@@ -149,6 +150,14 @@ public class Order {
         this.status = string;
     }
 
+    public String getClientOrderId() {
+        return this.clientOrderId;
+    }
+
+    public void setClientOrderId(String string) {
+        this.clientOrderId = string;
+    }
+
     public boolean isNotified() {
         return this.notified;
     }
@@ -169,4 +178,3 @@ public class Order {
         this.items.add(orderItem);
     }
 }
-

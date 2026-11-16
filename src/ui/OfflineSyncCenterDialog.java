@@ -8,13 +8,18 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JScrollPane;
+import javax.swing.SwingUtilities;
 import javax.swing.JTextArea;
 import javax.swing.SwingWorker;
+import model.Order;
 import util.UIHelper;
 
 public class OfflineSyncCenterDialog extends JDialog {
@@ -80,9 +85,10 @@ public class OfflineSyncCenterDialog extends JDialog {
                     OfflineSyncService.prepareOfflineData();
                     return "Offline data is ready on this computer. Saved at: " + OfflineStore.getStoreLocation();
                 }
-                List<String> results = "orders".equals(task) ? OfflineSyncService.syncOrders()
+                List<String> results = "orders".equals(task) ? OfflineSyncService.syncOrders(
+                    OfflineSyncCenterDialog.this::confirmDuplicateOrder)
                     : "inventory".equals(task) ? OfflineSyncService.syncInventoryChanges()
-                    : OfflineSyncService.syncPending();
+                    : OfflineSyncService.syncPending(OfflineSyncCenterDialog.this::confirmDuplicateOrder);
                 return results.isEmpty() ? "There are no pending changes." : String.join("\n", results);
             }
 
@@ -101,6 +107,33 @@ public class OfflineSyncCenterDialog extends JDialog {
                 }
             }
         }.execute();
+    }
+
+    private boolean confirmDuplicateOrder(Map<String, Object> pendingOrder, Order existingOrder) {
+        AtomicBoolean approved = new AtomicBoolean();
+        Runnable prompt = () -> {
+            String pendingNo = String.valueOf(pendingOrder.getOrDefault("orderNo", "offline order"));
+            String existingTime = existingOrder.getOrderTime() == null
+                ? "" : " at " + existingOrder.getOrderTime();
+            int choice = JOptionPane.showConfirmDialog(this,
+                "Offline order " + pendingNo + " matches existing order "
+                    + existingOrder.getOrderNo() + existingTime + " exactly. Sync it anyway?",
+                "Possible Duplicate Order", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+            approved.set(choice == JOptionPane.YES_OPTION);
+        };
+        if (SwingUtilities.isEventDispatchThread()) {
+            prompt.run();
+        } else {
+            try {
+                SwingUtilities.invokeAndWait(prompt);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Duplicate-order confirmation was interrupted.", exception);
+            } catch (java.lang.reflect.InvocationTargetException exception) {
+                throw new IllegalStateException("Could not confirm the possible duplicate order.", exception.getCause());
+            }
+        }
+        return approved.get();
     }
 
     private void setBusy(boolean busy) {
