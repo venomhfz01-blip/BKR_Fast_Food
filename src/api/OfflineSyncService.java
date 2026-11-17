@@ -9,9 +9,15 @@ import java.util.Set;
 import model.Order;
 
 public final class OfflineSyncService {
+    public enum DuplicateOrderResolution {
+        USE_EXISTING,
+        CREATE_DUPLICATE,
+        LEAVE_PENDING
+    }
+
     @FunctionalInterface
     public interface DuplicateOrderConfirmation {
-        boolean confirm(Map<String, Object> pendingOrder, Order existingOrder);
+        DuplicateOrderResolution confirm(Map<String, Object> pendingOrder, Order existingOrder);
     }
 
     private OfflineSyncService() {
@@ -60,8 +66,16 @@ public final class OfflineSyncService {
                     data.put("clientOrderId", clientId);
                     Order existing = new OrderDAO().findPossibleDuplicateOnline(data);
                     if (existing != null) {
-                        boolean approved = confirmation != null && confirmation.confirm(data, existing);
-                        if (!approved) {
+                        DuplicateOrderResolution resolution = confirmation == null
+                            ? DuplicateOrderResolution.LEAVE_PENDING
+                            : confirmation.confirm(data, existing);
+                        if (resolution == DuplicateOrderResolution.USE_EXISTING) {
+                            markMatchedExisting(clientId, existing);
+                            results.add("Matched offline order " + value(data.get("orderNo"))
+                                + " to existing order " + existing.getOrderNo() + ".");
+                            continue;
+                        }
+                        if (resolution != DuplicateOrderResolution.CREATE_DUPLICATE) {
                             results.add("Skipped possible duplicate order " + value(data.get("orderNo"))
                                 + "; it still matches existing order " + existing.getOrderNo()
                                 + " and remains pending.");
@@ -76,7 +90,38 @@ public final class OfflineSyncService {
                 OfflineStore.markSynced(clientId, response);
                 results.add("Synced " + type + " (" + clientId + ").");
             } catch (Exception exception) {
-                if (isConflict(exception) && "purchase-item".equals(type)
+                if (isConflict(exception) && "order".equals(type)) {
+                    Order existing = duplicateOrderFromConflict(exception);
+                    if (existing == null) {
+                        results.add("Could not sync order (" + clientId + "): " + exception.getMessage());
+                        continue;
+                    }
+                    DuplicateOrderResolution resolution = confirmation == null
+                        ? DuplicateOrderResolution.LEAVE_PENDING
+                        : confirmation.confirm(data, existing);
+                    if (resolution == DuplicateOrderResolution.USE_EXISTING) {
+                        markMatchedExisting(clientId, existing);
+                        results.add("Matched offline order " + value(data.get("orderNo"))
+                            + " to existing order " + existing.getOrderNo() + ".");
+                    } else if (resolution == DuplicateOrderResolution.CREATE_DUPLICATE
+                            && !Boolean.TRUE.equals(data.get("allowDuplicate"))) {
+                        try {
+                            data.put("allowDuplicate", true);
+                            Map<String, Object> response = syncOne(type, clientId, data);
+                            OfflineStore.markSynced(clientId, response);
+                            results.add("Synced order (" + clientId + ") after duplicate confirmation.");
+                        } catch (Exception retryException) {
+                            results.add("Could not sync order (" + clientId + "): "
+                                + retryException.getMessage());
+                        }
+                    } else if (resolution == DuplicateOrderResolution.LEAVE_PENDING) {
+                        results.add("Skipped possible duplicate order " + value(data.get("orderNo"))
+                            + "; it matches existing order " + existing.getOrderNo()
+                            + " and remains pending.");
+                    } else {
+                        results.add("Could not sync order (" + clientId + "): the server rejected the explicitly confirmed duplicate.");
+                    }
+                } else if (isConflict(exception) && "purchase-item".equals(type)
                         && resolveExistingPurchaseItem(clientId, data)) {
                     results.add("Matched existing purchase item (" + clientId + ").");
                 } else {
@@ -85,6 +130,38 @@ public final class OfflineSyncService {
             }
         }
         return results;
+    }
+
+    private static void markMatchedExisting(String clientId, Order existing) {
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("orderId", existing.getOrderId());
+        try {
+            OfflineStore.markSynced(clientId, response);
+        } catch (java.io.IOException exception) {
+            throw new IllegalStateException("Could not record the matched existing order: "
+                + exception.getMessage(), exception);
+        }
+    }
+
+    private static Order duplicateOrderFromConflict(Exception exception) {
+        String message = exception.getMessage();
+        if (message == null) return null;
+        int bodyStart = message.indexOf("): ");
+        if (bodyStart < 0) return null;
+
+        Map<String, Object> body = SimpleJson.parseObject(message.substring(bodyStart + 3));
+        Map<String, Object> duplicate = map(body.get("duplicateOrder"));
+        int orderId = integer(duplicate.get("orderId"));
+        if (orderId <= 0) return null;
+
+        Order existing = new Order();
+        existing.setOrderId(orderId);
+        existing.setOrderNo(value(duplicate.get("orderNo")));
+        String date = value(duplicate.get("orderDate"));
+        if (!date.isBlank()) existing.setOrderDate(java.time.LocalDate.parse(date));
+        String time = value(duplicate.get("orderTime"));
+        if (!time.isBlank()) existing.setOrderTime(java.time.LocalTime.parse(time));
+        return existing;
     }
 
     private static Map<String, Object> syncOne(String type, String clientId,

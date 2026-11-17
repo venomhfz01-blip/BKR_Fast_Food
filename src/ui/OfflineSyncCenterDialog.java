@@ -109,17 +109,26 @@ public class OfflineSyncCenterDialog extends JDialog {
         }.execute();
     }
 
-    private boolean confirmDuplicateOrder(Map<String, Object> pendingOrder, Order existingOrder) {
-        AtomicBoolean approved = new AtomicBoolean();
+    private OfflineSyncService.DuplicateOrderResolution confirmDuplicateOrder(
+            Map<String, Object> pendingOrder, Order existingOrder) {
+        java.util.concurrent.atomic.AtomicReference<OfflineSyncService.DuplicateOrderResolution> selected =
+            new java.util.concurrent.atomic.AtomicReference<>(
+                OfflineSyncService.DuplicateOrderResolution.LEAVE_PENDING);
         Runnable prompt = () -> {
             String pendingNo = String.valueOf(pendingOrder.getOrDefault("orderNo", "offline order"));
             String existingTime = existingOrder.getOrderTime() == null
                 ? "" : " at " + existingOrder.getOrderTime();
-            int choice = JOptionPane.showConfirmDialog(this,
+            Object[] choices = {"Use Existing Order", "Create Another Order", "Leave Pending"};
+            int choice = JOptionPane.showOptionDialog(this,
                 "Offline order " + pendingNo + " matches existing order "
-                    + existingOrder.getOrderNo() + existingTime + " exactly. Sync it anyway?",
-                "Possible Duplicate Order", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
-            approved.set(choice == JOptionPane.YES_OPTION);
+                    + existingOrder.getOrderNo() + existingTime + ".",
+                "Possible Duplicate Order", JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE,
+                null, choices, choices[0]);
+            if (choice == 0) {
+                selected.set(OfflineSyncService.DuplicateOrderResolution.USE_EXISTING);
+            } else if (choice == 1) {
+                selected.set(OfflineSyncService.DuplicateOrderResolution.CREATE_DUPLICATE);
+            }
         };
         if (SwingUtilities.isEventDispatchThread()) {
             prompt.run();
@@ -133,7 +142,7 @@ public class OfflineSyncCenterDialog extends JDialog {
                 throw new IllegalStateException("Could not confirm the possible duplicate order.", exception.getCause());
             }
         }
-        return approved.get();
+        return selected.get();
     }
 
     private void setBusy(boolean busy) {
