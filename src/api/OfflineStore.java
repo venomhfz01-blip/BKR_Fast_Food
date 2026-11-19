@@ -278,11 +278,23 @@ public final class OfflineStore {
     }
 
     private static String createOrder(Map<String, Object> state, Map<String, Object> payload) {
-        String clientId = UUID.randomUUID().toString();
+        Object rawClientOrderId = payload.get("clientOrderId");
+        String clientId = rawClientOrderId instanceof String && !((String) rawClientOrderId).isBlank()
+            ? ((String) rawClientOrderId).trim() : UUID.randomUUID().toString();
+        for (Object value : list(state, "orders")) {
+            if (!(value instanceof Map)) continue;
+            Map<String, Object> existing = stringMap(value);
+            if (!clientId.equals(string(existing.get("clientOrderId")))) continue;
+            return json(Map.of("orderId", integer(existing.get("orderId"), 0),
+                "orderNo", string(existing.get("orderNo")),
+                "orderDate", string(existing.get("orderDate")),
+                "orderTime", string(existing.get("orderTime"))));
+        }
         int localId = nextLocalId(state, "nextOrderId");
         LocalDate date = LocalDate.now(ZoneId.of("Asia/Karachi"));
         LocalTime time = LocalTime.now(ZoneId.of("Asia/Karachi")).withNano(0);
         Map<String, Object> order = new LinkedHashMap<>(payload);
+        order.put("clientOrderId", clientId);
         order.put("orderId", localId);
         order.put("orderNo", "OFF-" + String.format("%05d", Math.abs(localId)));
         order.put("orderDate", date.toString());

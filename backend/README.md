@@ -25,7 +25,7 @@ The health endpoint is `GET /health`.
 ## Order payment type
 
 - `PUT /api/orders/:id/payment-type` updates an order’s payment type. Send `{ "paymentType": "Cash" }`; supported values are `Cash`, `Card`, and `Online`. The response includes the order ID, order number, date, payment type, and total amount.
-- The desktop client warns before saving or syncing an order whose same-day customer, order type, table, payment type, totals, and items exactly match an existing order. During sync, operators can link the offline order to the existing order, create another order with explicit confirmation, or leave it pending. The backend still treats a retry with the same offline client order ID as the same operation.
+- Orders with identical items remain separate orders. Each order has a client order ID; the server treats retries with the same ID as the same operation and does not add another order or deduct inventory again.
 
 ## Item purchase history
 

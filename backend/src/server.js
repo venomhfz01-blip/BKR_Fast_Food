@@ -28,24 +28,6 @@ const query = (text, values = []) => {
 const number = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
 const dateRange = (req) => [req.query.from || req.query.startDate || req.query.date || '1900-01-01', req.query.to || req.query.endDate || req.query.date || '2999-12-31'];
 const sendError = (res, error) => res.status(error.code === '23505' ? 409 : 500).json({ error: error.message });
-const normalizedOrderText = (value) => String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
-const orderAmountKey = (value) => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed.toFixed(2) : '0.00';
-};
-const sameOrderItems = (submitted, existing) => {
-  if (!Array.isArray(submitted) || submitted.length === 0 || submitted.length !== existing.length) return false;
-  const fingerprint = (item) => [
-    normalizedOrderText(item.menuItemName),
-    number(item.quantity, 1),
-    orderAmountKey(item.unitPrice),
-    orderAmountKey(item.lineTotal)
-  ].join('\u0000');
-  const submittedItems = submitted.map(fingerprint).sort();
-  const existingItems = existing.map(fingerprint).sort();
-  return submittedItems.every((item, index) => item === existingItems[index]);
-};
-
 const menuSelect = `SELECT DISTINCT ON (LOWER(BTRIM(category)), LOWER(BTRIM(name)), LOWER(BTRIM(size))) menu_item_id AS "menuItemId", name, category, price, size, active FROM menu_items`;
 const inventorySelect = `SELECT item_id AS "itemId", item_name AS "itemName", quantity, reorder_level AS "reorderLevel", last_unit_price AS "lastUnitPrice" FROM inventory_items`;
 
@@ -557,42 +539,6 @@ api.post('/orders', async (req, res) => {
        ))`,
       [b.orderDate || null]
     );
-
-    if (b.allowDuplicate !== true) {
-      const candidates = (await client.query(
-        `SELECT order_id AS "orderId", order_no AS "orderNo", order_date::text AS "orderDate",
-                order_time::text AS "orderTime"
-         FROM orders
-         WHERE order_date = COALESCE($1::date, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Karachi')::date)
-           AND customer_name = $2 AND order_type = $3 AND table_number = $4 AND payment_type = $5
-           AND subtotal = $6 AND discount = $7 AND delivery_charge = $8
-           AND service_charge_percent = $9 AND service_charge = $10 AND total_amount = $11
-           AND status = $12
-         ORDER BY order_time, order_id`,
-        [
-          b.orderDate || null, b.customerName || '', b.orderType || 'Dine In',
-          b.tableNumber || '', b.paymentType || 'Cash', number(b.subtotal),
-          number(b.discount), number(b.deliveryCharge), number(b.serviceChargePercent),
-          number(b.serviceCharge), number(b.totalAmount), b.status || 'Completed'
-        ]
-      )).rows;
-
-      for (const candidate of candidates) {
-        const existingItems = (await client.query(
-          `SELECT menu_item_name AS "menuItemName", quantity, unit_price AS "unitPrice",
-                  line_total AS "lineTotal"
-           FROM order_items WHERE order_id = $1 ORDER BY order_item_id`,
-          [candidate.orderId]
-        )).rows;
-        if (!sameOrderItems(b.items || [], existingItems)) continue;
-
-        await client.query('ROLLBACK');
-        return res.status(409).json({
-          error: `This order matches existing order ${candidate.orderNo}. Confirm it explicitly to save another copy.`,
-          duplicateOrder: candidate
-        });
-      }
-    }
 
     const orderNo = clientOrderId && b.orderNo ? String(b.orderNo) : await nextOrderNo(client);
     const order = (await client.query(
